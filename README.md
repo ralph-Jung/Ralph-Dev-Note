@@ -24,11 +24,13 @@
 
 ## 노트 목록
 
+<!-- NOTE-INDEX:START — 이 블록은 note 스킬이 Dev-Note/를 스캔해 자동 재생성한다. 직접 수정 금지 -->
 | 주제 | 다루는 것 |
 |---|---|
 | [JWT 서명 원리 (HMAC-SHA256)](Dev-Note/jwt-signing.md) | 대칭키 서명, HMAC, 토큰 위변조 검증 |
 | [Spring Security 로그인·인증 흐름](Dev-Note/spring-security-auth-flow.md) | AuthenticationManager, UserDetailsService, PasswordEncoder |
 | [Spring Security 필터 구조](Dev-Note/spring-security-filter.md) | 서블릿 필터, 시큐리티 필터 체인, JWT 필터 위치 |
+<!-- NOTE-INDEX:END -->
 
 ---
 
