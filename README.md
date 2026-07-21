@@ -29,7 +29,9 @@
 |---|---|
 | [JWT 서명 원리 (HMAC-SHA256)](Dev-Note/jwt-signing.md) | 대칭키 서명, HMAC, 토큰 위변조 검증 |
 | [Spring Security 로그인·인증 흐름](Dev-Note/spring-security-auth-flow.md) | AuthenticationManager, UserDetailsService, PasswordEncoder |
-| [Spring Security 필터 구조](Dev-Note/spring-security-filter.md) | 서블릿 필터, 시큐리티 필터 체인, JWT 필터 위치 |
+| [Spring Security 필터 구조](Dev-Note/spring-security-filter.md) | 서블릿 필터, 필터 체인, 템플릿 메서드 패턴, 커스텀 핸들러 실행 원리 |
+| [OAuth2 state와 쿠키 저장소 (STATELESS 유지)](Dev-Note/oauth2-state-cookie.md) | state 정체, 쿠키 save/load/remove, 도메인 규칙, CSRF |
+| [구글 OAuth2 소셜 로그인 전체 흐름](Dev-Note/oauth2-google-login.md) | Authorization Code, code→token 교환, Provider 체인, userinfo, upsert |
 <!-- NOTE-INDEX:END -->
 
 ---
