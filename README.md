@@ -25,16 +25,26 @@
 ## 노트 목록
 
 <!-- NOTE-INDEX:START — 이 블록은 note 스킬이 Dev-Note/를 스캔해 자동 재생성한다. 직접 수정 금지 -->
-| 주제 | 다루는 것 |
-|---|---|
-| [JWT 서명 원리 (HMAC-SHA256)](Dev-Note/jwt-signing.md) | 대칭키 서명, HMAC, 토큰 위변조 검증 |
-| [Spring Security 로그인·인증 흐름](Dev-Note/spring-security-auth-flow.md) | AuthenticationManager, UserDetailsService, PasswordEncoder |
-| [Spring Security 필터 구조](Dev-Note/spring-security-filter.md) | 서블릿 필터, 필터 체인, 템플릿 메서드 패턴, 커스텀 핸들러 실행 원리 |
-| [OAuth2 state와 쿠키 저장소 (STATELESS 유지)](Dev-Note/oauth2-state-cookie.md) | state 정체, 쿠키 save/load/remove, 도메인 규칙, CSRF |
-| [구글 OAuth2 소셜 로그인 전체 흐름](Dev-Note/oauth2-google-login.md) | Authorization Code, code→token 교환, Provider 체인, userinfo, upsert |
-| [Persistence (JPA · Hibernate · JDBC · JPQL)](Dev-Note/persistence.md) | @Id/@GeneratedValue, BigDecimal, 타임존/Instant, DB DEFAULT, 생명주기 콜백 |
-| [Java 기초 (언어/문법)](Dev-Note/java-basics.md) | 리플렉션 등 자바 언어 자체 기능 |
-| [트러블슈팅 로그](Dev-Note/트러블슈팅-로그.md) | redirect_uri_mismatch, authorization_request_not_found, Flyway 등 에러 해결 기록 |
+**인증·보안**
+
+- [JWT 서명 원리 (HMAC-SHA256)](Dev-Note/jwt-signing.md)
+- [Spring Security 로그인·인증 흐름](Dev-Note/spring-security-auth-flow.md)
+- [Spring Security 필터 구조](Dev-Note/spring-security-filter.md)
+- [OAuth2 state와 쿠키 저장소 (STATELESS 유지)](Dev-Note/oauth2-state-cookie.md)
+- [구글 OAuth2 소셜 로그인 전체 흐름](Dev-Note/oauth2-google-login.md)
+
+**데이터**
+
+- [Persistence (JPA · Hibernate · JDBC · JPQL)](Dev-Note/persistence.md)
+- [DB 기초 (SQL · 스키마 · 마이그레이션)](Dev-Note/db-basics.md)
+
+**언어**
+
+- [Java 기초 (언어/문법)](Dev-Note/java-basics.md)
+
+**기록**
+
+- [트러블슈팅 로그](Dev-Note/트러블슈팅-로그.md)
 <!-- NOTE-INDEX:END -->
 
 ---

@@ -1,8 +1,7 @@
 # OAuth2 state와 쿠키 저장소 (STATELESS 유지)
 
-> 주제: OAuth2 state와 쿠키 저장소 · 갱신: 2026-07-21 · 상태: 진행중
-> 태그: #spring-security #oauth2 #소셜로그인 #csrf #cookie #stateless #state
-> 다음에 팔 것: 쿠키 직렬화 보안(역직렬화 취약점), SameSite 옵션, IF_REQUIRED로 바꾸면 이 파일 통째로 삭제 가능한지
+> **주제**: OAuth2 state와 쿠키 저장소 · 갱신: 2026-07-21 · 상태: 진행중
+> **태그**: #OAuth2 #state #쿠키 #spring-security
 
 ## ① 큰 그림 (지도)
 
@@ -26,9 +25,11 @@ OAuth 로그인은 **"시작 요청"과 "구글 콜백"이 서로 다른 HTTP �
 - 핵심 파일: `HttpCookieOAuth2AuthorizationRequestRepository` (save/load/remove 3메서드).
 - 이 파일이 있어야 **세션 0개로 STATELESS를 지키면서** OAuth가 돈다. → 전체 여정은 [[oauth2-google-login]]
 
-## ② 질문 트리 (본문) ★핵심
+## ② 질문 트리 (본문)
 
-### Q. HttpCookieOAuth2AuthorizationRequestRepository의 역할이 뭐야?
+### 2026-07-21
+
+#### Q. HttpCookieOAuth2AuthorizationRequestRepository의 역할이 뭐야?
 - **한줄답**: 구글 왕복 사이에 로그인 정보(state 포함)를 쿠키에 맡겼다 꺼내는 "번호표 보관함".
 - **원리** — 시작 → 과정 → 결과:
     - [시작] `AuthorizationRequestRepository` 인터페이스 = save/load/remove 규격
@@ -37,7 +38,7 @@ OAuth 로그인은 **"시작 요청"과 "구글 콜백"이 서로 다른 HTTP �
 - **왜 이렇게**: 세션을 안 쓰기로 한 정책을 깨지 않으려고. → 아래 Q(구글로 쿠키 가나)
 - **연결**: → [[spring-security-filter]]
 
-### Q. OAuth2AuthorizationRequest는 내가 만든 거야, 라이브러리 거야?
+#### Q. OAuth2AuthorizationRequest는 내가 만든 거야, 라이브러리 거야?
 - **한줄답**: 라이브러리 것. `spring-boot-starter-oauth2-client`가 딸려오게 한 `spring-security-oauth2-core` 안에 있다.
 - **원리**:
     - import가 `org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest` = core 소속
@@ -45,7 +46,7 @@ OAuth 로그인은 **"시작 요청"과 "구글 콜백"이 서로 다른 HTTP �
     - 둘 다 우리 패키지(com.gachon) 코드가 아님
 - **연결**: → 아래 Q(state 정체)
 
-### Q. state를 발급한다는 게, state 안에 요청 정보를 담는 거야?
+#### Q. state를 발급한다는 게, state 안에 요청 정보를 담는 거야?
 - **한줄답**: 아니. state는 **정보 통이 아니라 랜덤 번호표** 하나(CSRF 방어용).
 - **원리**:
     - 쿠키에 저장되는 건 `OAuth2AuthorizationRequest` 객체 전체(state + redirectUri + clientId + scope)
@@ -55,7 +56,7 @@ OAuth 로그인은 **"시작 요청"과 "구글 콜백"이 서로 다른 HTTP �
 
 ---
 
-### Q. 프론트에서 /oauth2/authorization/google로 연결하면 내 서버로 들어와?
+#### Q. 프론트에서 /oauth2/authorization/google로 연결하면 내 서버로 들어와?
 - **한줄답**: 맞음. 그 URL은 **구글이 아니라 내 백엔드 서버 주소**다.
 - **원리** — 시작 → 과정 → 결과:
     - [시작] `localhost:8080/oauth2/authorization/google` = 앞부분이 내 서버
@@ -64,7 +65,7 @@ OAuth 로그인은 **"시작 요청"과 "구글 콜백"이 서로 다른 HTTP �
 - **주의**: 프론트는 `fetch/axios` 말고 **브라우저 전체 이동**(`window.location`/`<a>`)이어야 함 — redirect 흐름이라 fetch는 CORS로 깨짐.
 - **연결**: → 아래 Q(save가 어떻게)
 
-### Q. save 메서드가 이해가 안 돼. addCookie가 어떻게 브라우저에 저장돼?
+#### Q. save 메서드가 이해가 안 돼. addCookie가 어떻게 브라우저에 저장돼?
 > 그때 왜 궁금했나: 자바 메서드 하나 부른 게 어떻게 브라우저 안 쿠키가 되는지가 안 그려졌다.
 - **한줄답**: 객체를 문자열로 바꿔 response에 Set-Cookie로 얹으면, 브라우저가 HTTP 규칙상 자동 저장한다.
 - **원리** — 시작 → 과정 → 결과:
@@ -74,7 +75,7 @@ OAuth 로그인은 **"시작 요청"과 "구글 콜백"이 서로 다른 HTTP �
     - [결과] 브라우저가 `Set-Cookie`를 받으면 자동 저장 (우리가 "저장해"라고 명령 안 함)
 - **연결**: → 아래 Q(addCookie 인자)
 
-### Q. addCookie의 인자 4개가 다 저장되는 거야?
+#### Q. addCookie의 인자 4개가 다 저장되는 거야?
 - **한줄답**: 아니. `response`는 배달부(저장 안 됨), 나머지 3개(이름/값/수명)가 쿠키의 각 부분이 됨.
 - **원리**:
     - `response` = 쿠키 실어보낼 통로 (저장 안 됨)
@@ -84,7 +85,7 @@ OAuth 로그인은 **"시작 요청"과 "구글 콜백"이 서로 다른 HTTP �
 - **결과물**: `Set-Cookie: oauth2_auth_request=...; Max-Age=180; HttpOnly` 헤더 한 줄
 - **연결**: → 아래 Q(header에 담기)
 
-### Q. addCookie가 response 객체 안에 header로 쿠키를 담는 거지?
+#### Q. addCookie가 response 객체 안에 header로 쿠키를 담는 거지?
 - **한줄답**: 맞음. `response`에 `Set-Cookie` 헤더 형태로 등록하는 것.
 - **원리** — 시작 → 과정 → 결과:
     - [시작] `addCookie(response, ...)` 호출 = Cookie 객체를 Set-Cookie 헤더 문자열로 변환
@@ -93,7 +94,7 @@ OAuth 로그인은 **"시작 요청"과 "구글 콜백"이 서로 다른 HTTP �
 - **왜 순서 중요**: `sendRedirect`(응답 커밋)보다 **먼저** addCookie 해야 함. 커밋 후엔 헤더 추가 불가.
 - **연결**: → 아래 Q(sendRedirect 헤더)
 
-### Q. sendRedirect 할 때 쿠키를 header에 담아 보내는 거야?
+#### Q. sendRedirect 할 때 쿠키를 header에 담아 보내는 거야?
 - **한줄답**: 쿠키는 `Set-Cookie` 응답 헤더에 실려 나간다. 단, sendRedirect가 담는 게 아니라 이미 등록된 게 같이 나가는 것.
 - **원리**:
     - `addCookie` = `Set-Cookie` 헤더 등록 / `sendRedirect` = `Location` 헤더 + 302 등록
@@ -103,7 +104,7 @@ OAuth 로그인은 **"시작 요청"과 "구글 콜백"이 서로 다른 HTTP �
 
 ---
 
-### Q. state를 언제 구글에 보냈어? 쿠키는 구글이 안 받았잖아?
+#### Q. state를 언제 구글에 보냈어? 쿠키는 구글이 안 받았잖아?
 > 그때 왜 궁금했나: 쿠키가 구글로 안 가는데 콜백 URL에 state가 있는 게 모순처럼 느껴졌다.
 - **한줄답**: state는 쿠키가 아니라 **구글行 redirect URL의 쿼리스트링**으로 보냈다(쿠키와 URL 두 곳에 심음).
 - **원리** — 시작 → 과정 → 결과:
@@ -113,14 +114,14 @@ OAuth 로그인은 **"시작 요청"과 "구글 콜백"이 서로 다른 HTTP �
 - **왜 이렇게**: 공격자는 HttpOnly 쿠키를 못 읽어 URL state를 쿠키값과 못 맞춤 → 위조 차단(CSRF).
 - **연결**: → 아래 Q(넣는 주체), → [[oauth2-google-login]]의 state 대조
 
-### Q. URL 쿼리에 state를 넣는 건 누구 역할이야?
+#### Q. URL 쿼리에 state를 넣는 건 누구 역할이야?
 - **한줄답**: 시작 필터 `OAuth2AuthorizationRequestRedirectFilter`.
 - **원리**:
     - `OAuth2AuthorizationRequestRedirectFilter` = state 생성 + 객체 조립 + 쿠키 save + 구글行 URL 조립(state 삽입) + redirect 담당
     - (엄밀히는 내부 도우미 `OAuth2AuthorizationRequestResolver`가 객체 조립)
 - **연결**: → [[spring-security-filter]]의 필터 계층
 
-### Q. 구글이 내 서버로 redirect할 때, 브라우저가 쿠키를 구글로 보내는 거야?
+#### Q. 구글이 내 서버로 redirect할 때, 브라우저가 쿠키를 구글로 보내는 거야?
 > 그때 왜 궁금했나: 쿠키가 대체 어느 요청에 붙는지(구글이냐 내 서버냐)가 헷갈렸다.
 - **한줄답**: 아니. 우리 쿠키는 **구글엔 안 붙고**, 나중에 내 서버로 돌아올 때만 붙는다.
 - **원리** — 시작 → 과정 → 결과:
@@ -131,19 +132,23 @@ OAuth 로그인은 **"시작 요청"과 "구글 콜백"이 서로 다른 HTTP �
 - **연결**: → [[oauth2-google-login]]의 콜백 처리
 
 ## ③ 용어 카드 (역참조)
-- **state**: OAuth 위조 방지용 랜덤 문자열(번호표). 정보 없음. 쿠키+URL 두 곳에 심음. → Q.state 정체
-- **OAuth2AuthorizationRequest**: state/redirectUri/clientId/scope를 담은 라이브러리 객체. 쿠키에 통째로 저장. → Q.라이브러리 거야
-- **AuthorizationRequestRepository**: save/load/remove 규격 인터페이스. 기본=세션, 우리=쿠키. → Q.역할
-- **Set-Cookie / Cookie**: 전자=서버→브라우저(저장해, 응답헤더), 후자=브라우저→서버(가져왔어, 요청헤더). → Q.sendRedirect
-- **쿠키 도메인 규칙**: 쿠키는 발급 도메인에만 자동 첨부. 구글엔 안 붙는 이유. → Q.구글로 보내나
-- **직렬화/역직렬화**: 객체↔문자열 변환(+Base64). 쿠키는 문자열만 담아서 필요. → Q.save 이해
 
-## ④ 내가 틀렸던 것 (오개념 로그) ★가치 높음
-| 내가 생각했던 것 | 실제 |
-|---|---|
-| state 안에 요청 정보가 담겨 있다 | state는 랜덤 번호표. 정보는 OAuth2AuthorizationRequest 객체에 |
-| save는 구글로 보내려고 저장하는 것 | 지금 쓰려는 게 아니라 "나중에 돌아올 콜백"에서 대조하려고 |
-| state를 쿠키로 구글에 보냈다 | 쿠키 아니라 구글行 URL 쿼리로 보냄. 구글이 그걸 echo |
-| 브라우저가 쿠키를 구글로 보낸다 | 도메인 달라서 구글엔 안 붙음. 내 서버로 돌아올 때만 |
-| addCookie의 response도 쿠키에 저장된다 | response는 배달부. 이름/값/수명만 쿠키가 됨 |
-| sendRedirect가 쿠키를 담아 보낸다 | addCookie가 미리 Set-Cookie 등록, redirect 응답에 같이 실림 |
+> [!quote]- 용어 6개
+> - **state**: OAuth 위조 방지용 랜덤 문자열(번호표). 정보 없음. 쿠키+URL 두 곳에 심음. → Q.state 정체
+> - **OAuth2AuthorizationRequest**: state/redirectUri/clientId/scope를 담은 라이브러리 객체. 쿠키에 통째로 저장. → Q.라이브러리 거야
+> - **AuthorizationRequestRepository**: save/load/remove 규격 인터페이스. 기본=세션, 우리=쿠키. → Q.역할
+> - **Set-Cookie / Cookie**: 전자=서버→브라우저(저장해, 응답헤더), 후자=브라우저→서버(가져왔어, 요청헤더). → Q.sendRedirect
+> - **쿠키 도메인 규칙**: 쿠키는 발급 도메인에만 자동 첨부. 구글엔 안 붙는 이유. → Q.구글로 보내나
+> - **직렬화/역직렬화**: 객체↔문자열 변환(+Base64). 쿠키는 문자열만 담아서 필요. → Q.save 이해
+
+## ④ 내가 틀렸던 것 (오개념 로그)
+
+> [!quote]- 오개념 6건
+> | 내가 생각했던 것 | 실제 |
+> |---|---|
+> | state 안에 요청 정보가 담겨 있다 | state는 랜덤 번호표. 정보는 OAuth2AuthorizationRequest 객체에 |
+> | save는 구글로 보내려고 저장하는 것 | 지금 쓰려는 게 아니라 "나중에 돌아올 콜백"에서 대조하려고 |
+> | state를 쿠키로 구글에 보냈다 | 쿠키 아니라 구글行 URL 쿼리로 보냄. 구글이 그걸 echo |
+> | 브라우저가 쿠키를 구글로 보낸다 | 도메인 달라서 구글엔 안 붙음. 내 서버로 돌아올 때만 |
+> | addCookie의 response도 쿠키에 저장된다 | response는 배달부. 이름/값/수명만 쿠키가 됨 |
+> | sendRedirect가 쿠키를 담아 보낸다 | addCookie가 미리 Set-Cookie 등록, redirect 응답에 같이 실림 |
