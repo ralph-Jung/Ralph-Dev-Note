@@ -66,7 +66,7 @@
 #### Q. created_at / updated_at 을 자동으로 찍으려면?
 - **한줄답**: **`@PrePersist`(생성 직전)·`@PreUpdate`(수정 직전)** 콜백에서 `now()`를 찍는다.
 - **원리**: 필드 초기화(`= now()`)는 `new` 될 때 ==1회만 실행되므로 updated_at이 수정 시각을 못 따라간다==(버그). `created_at`은 필드초기화도 버그는 아니나, 생성(new) vs 저장(persist) 시점 차이 + 일관성 때문에 `@PrePersist` 권장. 콜백은 Hibernate가 flush 직전 자동 호출(**어노테이션이 트리거**, 메서드명 자유, 엔티티 내부면 `void`+no-arg, `private` 가능). ==콜백 안에서 다른 DB 작업은 금지.==
-- **연결**: 콜백이 이름 무관하게 호출되는 내부 원리(리플렉션)는 → [[java-basics]] (자바 언어 개념).
+- **연결**: 콜백이 이름 무관하게 호출되는 내부 원리(리플렉션)는 → [[JavaBasics]] (자바 언어 개념).
 
 #### Q. 복합키를 쓸 때 왜 ID 클래스를 따로 만들어야 하나? "JPA는 @Id가 하나여야 한다"가 이유인가?
 - **한줄답**: 그 이유는 틀렸다. ==@IdClass를 쓰면 @Id를 두 개 달 수 있다.== 진짜 이유는 ==식별자를 "값 하나"로 넘겨야 하는 API 지점==이 존재하기 때문이다.
@@ -139,7 +139,7 @@ public class ProblemTag {
   터지는 지점은 두 곳: ① 영속성 컨텍스트 직렬화(`StatefulPersistenceContext.serialize()` → 세션 클러스터링/passivation), ② 분산 2차 캐시 키(`CacheKeyImplementation implements Serializable`이 `Object id`를 필드로 보유 → Redis/Hazelcast 전송 시).
   단, **Hibernate 7.4.1에 부팅 시점 검증은 없다**(mapping·boot 패키지에 검사 코드 부재). 즉 안 붙여도 뜨고, 캐시나 다중 인스턴스를 붙이는 날 `NotSerializableException`으로 터진다.
   스펙 조문상 경로도 둘로 갈린다 — 복합 PK는 §2.4가 "serializable이어야 한다"고 직접 명시하고, 단일 PK는 **허용 타입 목록**(primitive/wrapper/String/BigDecimal/Date…)을 열거하는데 그 목록이 전부 Serializable이다.
-- **연결**: `Number` 상속 계층과 `find(Class, Object)`의 오토박싱은 → [[java-basics]]. → 위 Q(왜 ID 클래스가 필요한가?)와 같은 "식별자" 갈래.
+- **연결**: `Number` 상속 계층과 `find(Class, Object)`의 오토박싱은 → [[JavaBasics]]. → 위 Q(왜 ID 클래스가 필요한가?)와 같은 "식별자" 갈래.
 
 #### Q. @Enumerated(EnumType.STRING) 하고 @JdbcTypeCode(SqlTypes.NAMED_ENUM), 이 두 줄이 무슨 말이야?
 - **한줄답**: 변환이 **두 번** 일어나는데 각각 다른 층을 정한다. `@Enumerated` = **무엇을 보낼지**(값), `@JdbcTypeCode` = **어떤 타입으로 보낼지**(봉투). **두 줄을 다 붙이는 건 PostgreSQL + 네이티브 ENUM 스키마일 때뿐이다.** 그 외에는 전부 `@Enumerated(STRING)` 하나만 쓴다.
@@ -164,7 +164,7 @@ public class ProblemTag {
   DB별로 갈리는 지점 — Hibernate가 상수를 나눠둔 이유: `SqlTypes.ENUM`=6000(인라인 ENUM, MySQL은 컬럼 정의에 값이 박힘), `SqlTypes.NAMED_ENUM`=6001(이름 붙은 ENUM 타입, PostgreSQL). MySQL 인라인 ENUM은 문자열을 그대로 받아서 `@Enumerated(STRING)` 하나로 충분하다. 즉 실질적으로 PostgreSQL 전용 얘기지만, 더 정확한 기준은 "PostgreSQL이라서"가 아니라 ==타입에 이름이 있어서==다. (DB를 바꿔도 이 기준으로 판단하면 된다.)
   **psql에선 되는데 JPA에선 안 되는 이유**: 리터럴(`'UNSOLVED'`)은 타입이 미정이라 Postgres가 문맥을 보고 해석해 주지만, JDBC 파라미터 바인딩은 **타입이 못박혀** 나가서 암묵 캐스팅이 사라진다.
   ORDINAL은 네이티브 ENUM이 아니어도 쓰면 안 된다 — **순서 번호**라서 enum 중간에 값을 하나 끼워 넣으면 기존 데이터의 의미가 통째로 밀린다(SOLVED였던 행이 REVIEW가 되는 식). 에러도 안 난다. `@Enumerated`는 항상 명시한다.
-- **연결**: enum 자체는 → [[java-basics]]. → 위 Q(NUMERIC 컬럼은 어떤 타입으로?)와 같은 "필드 타입 매핑" 갈래.
+- **연결**: enum 자체는 → [[JavaBasics]]. → 위 Q(NUMERIC 컬럼은 어떤 타입으로?)와 같은 "필드 타입 매핑" 갈래.
 
 #### Q. private Integer displayOrder = 0; 처럼 필드에 값을 초기화하는 방식은 보통 많이 안 쓰나?
 - **한줄답**: 많이 쓴다. ==JPA에서는 기본값을 주는 사실상 유일한 수단==이다. 다만 ==생성자가 받는 필드에 쓰면 죽은 코드==가 된다.

@@ -25,26 +25,32 @@
 ## 노트 목록
 
 <!-- NOTE-INDEX:START — 이 블록은 note 스킬이 Dev-Note/를 스캔해 자동 재생성한다. 직접 수정 금지 -->
+**Spring Security** (`Dev-Note/SpringSecurity/`)
+
+- [필터 체인 구조 (어디서 도는가)](Dev-Note/SpringSecurity/FilterChain.md)
+- [인증 (너 누구냐)](Dev-Note/SpringSecurity/Authentication.md)
+- [인가 (그거 해도 되냐)](Dev-Note/SpringSecurity/Authorization.md)
+- [예외 처리 (거부되면 뭘 돌려주나)](Dev-Note/SpringSecurity/ExceptionHandling.md)
+- [방어 계층 (공격을 어떻게 막나)](Dev-Note/SpringSecurity/Protection.md)
+- [OAuth2 소셜 로그인 (구글)](Dev-Note/SpringSecurity/OAuth2.md)
+
 **인증·보안**
 
-- [JWT 서명 원리 (HMAC-SHA256)](Dev-Note/jwt-signing.md)
-- [Spring Security 로그인·인증 흐름](Dev-Note/spring-security-auth-flow.md)
-- [Spring Security 필터 구조](Dev-Note/spring-security-filter.md)
-- [OAuth2 state와 쿠키 저장소 (STATELESS 유지)](Dev-Note/oauth2-state-cookie.md)
-- [구글 OAuth2 소셜 로그인 전체 흐름](Dev-Note/oauth2-google-login.md)
+- [토큰 기반 인증 (JWT · Refresh)](Dev-Note/TokenAuth.md)
+- [서블릿 필터 (실행 모델 · 응답 작성)](Dev-Note/ServletFilter.md)
 
 **데이터**
 
-- [Persistence (JPA · Hibernate · JDBC · JPQL)](Dev-Note/persistence.md)
-- [DB 기초 (SQL · 스키마 · 마이그레이션)](Dev-Note/db-basics.md)
+- [Persistence (JPA · Hibernate · JDBC · JPQL)](Dev-Note/Persistence.md)
+- [DB 기초 (SQL · 스키마 · 마이그레이션)](Dev-Note/DbBasics.md)
 
 **언어**
 
-- [Java 기초 (언어/문법)](Dev-Note/java-basics.md)
+- [Java 기초 (언어/문법)](Dev-Note/JavaBasics.md)
 
 **기록**
 
-- [트러블슈팅 로그](Dev-Note/트러블슈팅-로그.md)
+- [Trouble Shooting](Dev-Note/TroubleShooting.md)
 <!-- NOTE-INDEX:END -->
 
 ---
