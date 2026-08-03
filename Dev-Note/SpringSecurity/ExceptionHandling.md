@@ -1,8 +1,9 @@
 # 예외 처리 (거부되면 뭘 돌려주나)
 
-> **주제**: 보안 예외의 발생·전파·응답 결정 — 필터 예외가 @RestControllerAdvice에 안 잡히는 이유, 그리고 401 vs 403이 갈리는 지점 · 갱신: 2026-07-28 · 상태: 진행중
-> **태그**: #spring-security #필터 #예외처리 #ErrorResponse
+> **주제**: 보안 예외의 발생·전파·응답 결정 — 필터 예외가 @RestControllerAdvice에 안 잡히는 이유, 401 vs 403이 갈리는 지점, 그리고 사정권 안에서 advice가 실제로 도는 구조(표준 예외 파이프라인) · 갱신: 2026-07-31 · 상태: 진행중
+> **태그**: #spring-security #필터 #예외처리 #ErrorResponse #spring-mvc
 > **확인 필요**: `ExceptionHandlingConfigurer` 가 명시된 EntryPoint를 우선하는 내부 구조와, ClientRegistration이 1개일 때 로그인 페이지를 건너뛰는 `OAuth2LoginConfigurer` 분기는 소스를 직접 열어 확인하지 않았다. 동작(302 → 401 전환) 자체는 curl로 확인됨.
+> `AsyncRequestTimeoutException(503)` 의 상태코드는 클래스를 직접 열어 확인하지 못했다. 나머지 상태코드와 20종 목록은 javap 로 실측했다.
 
 ## ① 큰 그림 (지도)
 
@@ -44,6 +45,26 @@ ExceptionTranslationFilter 의 catch → 익명? EntryPoint(401) : AccessDeniedH
 
 필터가 응답을 왜 직접 써야 하는지(체인 중단·response 공유)는 → [[ServletFilter]].
 
+그럼 사정권 **안**으로 들어온 예외는 어떻게 되는가. 여기서 다시 **어느 입구로 들어가는가**로 갈린다.
+
+```
+[advice 사정권 안 — 예외가 들어가는 세 개의 입구]
+
+예외 발생 (DispatcherServlet 안쪽)
+   │
+   ├─(A) 내가 붙인 @ExceptionHandler        CustomException / DataIntegrityViolationException
+   │        └→ 각자 ErrorResponse 직접 반환하고 끝. handleExceptionInternal 안 거침
+   │
+   ├─(B) GlobalExceptionHandler 가 상속받은 부모 ResponseEntityExceptionHandler
+   │        의 handleException  @ExceptionHandler({20종})   스프링 MVC 표준 예외
+   │        └→ 타입별 분기(handleMethodArgumentNotValid 등)
+   │             └→ handleExceptionInternal  ← 공통 출구. 여기만 오버라이드하면 20종이 전부 통일
+   │
+   └─(C) @ExceptionHandler(Exception.class)   A·B 어디에도 안 걸린 것 = 진짜 예상 못 한 예외 → 500
+```
+
+비유3: A는 전담 창구, B는 `ResponseEntityExceptionHandler` 가 미리 파둔 표준 창구, C는 그물 맨 아래층. B의 모양이 핵심이다 — **입구 하나 → 20갈래 → 출구 하나**의 모래시계다. 안에서 아무리 갈라져도 결국 한 곳으로 다시 모이기 때문에, 출구 한 곳만 잡으면 20종의 응답이 전부 통일된다.
+
 ## ② 질문 트리 (본문)
 
 ### 2026-07-26
@@ -69,7 +90,7 @@ ExceptionTranslationFilter 의 catch → 익명? EntryPoint(401) : AccessDeniedH
     - [과정] 톰캣이 받아서 `/error` 로 ERROR 디스패치 → `BasicErrorController` 가 기본 JSON을 낸다
     - [결과] `/error` 로 재진입할 때도 원래 예외는 다시 던져지는 게 아니라 ==`jakarta.servlet.error.exception` 이라는 request attribute로만 전달==돼서, advice가 반응할 대상 자체가 없다
 - **증명**: 같은 `IllegalArgumentException` 이라도 **컨트롤러·서비스에서 던지면 advice가 정상적으로 잡는다.** 타입은 동일한데 결과가 다르다는 건, 변수가 타입이 아니라 위치라는 뜻이다.
-- **연결**: → [[ServletFilter]] (필터가 응답을 직접 써야 하는 이유), → [[JavaBasics]] (컨트롤러·서비스 예외가 advice까지 가는 흐름)
+- **연결**: → [[ServletFilter]] (필터가 응답을 직접 써야 하는 이유), → [[JavaBasics]] (컨트롤러·서비스 예외가 advice까지 가는 흐름), → 아래 Q.handleExceptionInternal 이거는 뭐야 (사정권 **안**에서는 어떻게 도는가)
 
 #### Q. 아 그러면 ExceptionTranslationFilter가 필터 내에서 발생하는 예외를 잡는 역할이야?
 - **한줄답**: 아니다. ==`AuthenticationException` 과 `AccessDeniedException` 두 타입만 처리한다.== `IllegalArgumentException` 은 그냥 통과시켜 위로 올려보낸다.
@@ -147,9 +168,86 @@ ExceptionTranslationFilter 의 catch → 익명? EntryPoint(401) : AccessDeniedH
 - **실측**: 토큰 없음 / 쓰레기 토큰 / 만료 토큰 / refresh를 access 자리에 — 네 경우 모두 401 JSON이 나가는 것을 curl로 확인했다.
 - **연결**: → [[FilterChain]] (필터 체인 구조), → [[TokenAuth]] (만료 시 재발급 분기)
 
+---
+
+### 2026-07-31
+
+#### Q. 근데 handleExceptionInternal 이거는 뭐야? 왜 있는거야?
+- **한줄답**: `ResponseEntityExceptionHandler` 가 처리하는 스프링 MVC 표준 예외 20종이 ==마지막에 공통으로 거쳐가는 단일 출구==다. 여기만 오버라이드하면 20종의 응답 본문이 전부 우리 `ErrorResponse` 형태로 통일된다.
+- **원리** — 시작 → 과정 → 결과:
+    - [시작] 스프링 MVC가 표준 예외를 던진다 (깨진 JSON → `HttpMessageNotReadableException`)
+    - [과정] `GlobalExceptionHandler` 가 상속받은 부모 `ResponseEntityExceptionHandler` 의 `handleException` 이 잡는다 (`@ExceptionHandler` 에 20종이 선언돼 있음)
+    - [과정] 타입별 분기 메서드로 넘어간다 (`handleHttpMessageNotReadable`)
+    - [과정] 그 분기 메서드가 마지막에 `handleExceptionInternal` 을 호출한다
+    - [결과] 우리가 `@Override` 한 버전이 실행되어 ==상태코드는 `ResponseEntityExceptionHandler` 가 정한 것을 그대로 쓰고 본문만 교체한다==
+- **왜 상속 자체가 필요한가**: `ResponseEntityExceptionHandler` 를 상속하지 않으면 `@ExceptionHandler(Exception.class)` 가 20종을 전부 삼켜서 URL 오타도 500, 깨진 JSON도 500이 된다. 프론트가 서버 장애와 구분 못 하고 500 알람이 오탐으로 울린다.
+- **왜 오버라이드하나**: `ResponseEntityExceptionHandler` 의 기본 구현은 본문을 RFC 7807 `ProblemDetail`(`{type,title,status,detail,instance}`)로 만든다. 우리 `CustomException` 경로는 `{status,name,message}` 다. 그대로 두면 프론트가 파서를 두 개 유지해야 한다.
+- **실측**: 부팅 로그에 `handleExceptionInternal: status=400, type=MethodArgumentNotValidException` / `status=404, type=NoResourceFoundException` 이 찍혔다.
+- **연결**: → 아래 Q.왜 handleExceptionInternal 을 쓰며 어떻게 실행되나, → 위 Q.@ExceptionHandler(Throwable.class)로 넓혀도 (그건 사정권 **밖**, 이건 사정권 **안**의 이야기)
+
+#### Q. DataIntegrityViolationException 을 잡는 핸들러가 따로 있잖아? 근데 거기서 갑자기 handleExceptionInternal 을 왜 쓰며 이게 어떻게 실행되는거야?
+- **한줄답**: ==둘은 아무 관계가 없다.== 우리가 직접 붙인 `@ExceptionHandler` 는 `handleExceptionInternal` 을 거치지 않고 자기 메서드에서 응답을 만들고 끝낸다.
+- **원리**: 클래스 안 메서드가 두 그룹으로 나뉜다. 같은 클래스 안에 있어서 한 덩어리처럼 보일 뿐, 실행 경로가 아예 다르다.
+    - ① **우리가 붙인 `@ExceptionHandler`** (`CustomException`, `DataIntegrityViolationException`, `AccessDeniedException`, `AuthenticationException`, `Exception`) — 각자 `return ErrorResponse.toResponseEntity(...)` 로 끝난다. `handleExceptionInternal` 을 거치지 않는다.
+    - ② **상속받은 부모 `ResponseEntityExceptionHandler` 가 붙인 `@ExceptionHandler`** (20종) — 이쪽만 타입별 분기를 거쳐 `handleExceptionInternal` 로 수렴한다.
+- **스프링이 고르는 기준**: 던져진 예외 타입에 ==가장 구체적으로 일치하는 핸들러를 고른다.== `DataIntegrityViolationException` 은 `ResponseEntityExceptionHandler` 의 20종에 없으므로 우리 핸들러가 이기고, `NoResourceFoundException` 은 20종에 있고 우리가 선언하지 않았으므로 `ResponseEntityExceptionHandler` 쪽이 이긴다.
+- **증명(부팅 로그 실측)**: 409(닉네임 중복) 요청 구간에는 `handleDataIntegrityViolation: constraint=uk_users_nickname_lower, errorCode=DUPLICATE_NICKNAME` 한 줄만 있고 ==`handleExceptionInternal` 줄이 아예 없다.== 반대로 400(형식 위반) 요청에는 `handleExceptionInternal` 줄만 있다.
+- **단서**: `handleExceptionInternal` 에 `@Override` 가 붙어 있다는 것 자체가 답이다 — 우리가 새로 만든 메서드가 아니라 부모 `ResponseEntityExceptionHandler` 의 것을 가로챈 것이다.
+- **연결**: → 위 Q.handleExceptionInternal 이거는 뭐야, → [[Persistence]] (제약 위반이 트랜잭션을 abort 시켜 트랜잭션 안에서 복구 못 하는 이유)
+
+#### Q. 그러면 handleExceptionInternal 이거는 handleException 보다 뒤에서 잡히는거야?
+- **한줄답**: 순서는 맞는데 표현이 다르다. =="뒤에서 잡힌다"가 아니라 "뒤에서 호출된다"== 가 정확하다. 예외를 잡는 건 `handleException` 한 곳뿐이다.
+- **원리** — 시작 → 과정 → 결과:
+    - [시작] 예외 발생 → `handleException` 진입 (`@ExceptionHandler` 가 매칭되는 유일한 지점)
+    - [과정] 내부 `instanceof` 체인으로 타입별 분기 메서드를 호출한다
+    - [과정] 분기 메서드가 마지막에 `handleExceptionInternal` 을 호출한다
+    - [결과] 최종 `ResponseEntity` 반환
+- **핵심 구분**: ==`handleExceptionInternal` 에는 `@ExceptionHandler` 가 없다.== 예외를 직접 잡지 않고 처리 과정 마지막에 일반 메서드로 호출될 뿐이다. `handleException` 은 입구, `handleExceptionInternal` 은 출구이며, 둘은 경쟁 관계가 아니라 한 흐름의 앞뒤 단계다.
+- **왜 출구를 잡는가**: 입구(`handleException`)나 중간 분기를 건드리면 예외별로 따로 손봐야 하지만, ==모든 분기가 결국 지나는 출구를 잡으면 한 번에 끝난다.==
+- **연결**: → 아래 Q.내가 이해한 흐름이 맞나 (`final` 이야기)
+
+#### Q. @ExceptionHandler(Exception.class) 가 있는데 왜 스프링 MVC 표준 예외는 거기로 안 가?
+- **한줄답**: `Exception` 은 모든 예외의 최상위라 ==가장 덜 구체적==이다. 스프링은 가장 구체적인 핸들러를 먼저 고르므로 20종은 부모 쪽에 먼저 걸린다.
+- **원리**: `Exception.class` 핸들러는 ==그물의 맨 아래층==이다. 여기까지 내려오려면 A(우리 전담 핸들러)에도 B(`ResponseEntityExceptionHandler` 의 20종)에도 안 걸리는 예외여야 한다 — NPE나 예상 못 한 런타임 예외 같은 것.
+- **그래서 역할이 갈린다**: `handleExceptionInternal` 은 예상된 표준 예외를 받고, `handleUnexpectedException(Exception)` 은 진짜 예상 못 한 것만 받아 error 로그 + 스택트레이스를 남긴다.
+- **검증 방법**: 잘못된 `@RequestBody` 를 보내면 로그에 `handleExceptionInternal: status=400...` 만 찍히고 `handleUnexpectedException` 은 안 찍힌다. 반대로 찍힌다면 `ResponseEntityExceptionHandler` 상속이 빠진 것이다.
+- **연결**: → 위 Q.handleExceptionInternal 이거는 뭐야
+
+#### Q. (검증) ResponseEntityExceptionHandler 안 handleException에 예외들이 미리 정의돼 있고, 가장 구체적인 핸들러가 먼저 잡고, 분기 메서드가 handleExceptionInternal을 호출해서 응답 형식을 통일한다 — 이 이해가 맞아?
+- **한줄답**: 흐름은 전부 맞다. 다만 **세 가지를 바로잡아야 한다.**
+- **20종 목록** (javap 로 `handleException` 내부 `instanceof` 체인에서 추출, 이 순서 그대로):
+
+> [!note]- 스프링 MVC 표준 예외 20종 (굵은 것이 5xx)
+> - `HttpRequestMethodNotSupportedException` — 405
+> - `HttpMediaTypeNotSupportedException` — 415
+> - `HttpMediaTypeNotAcceptableException` — 406
+> - `MissingPathVariableException` — **500**
+> - `MissingServletRequestParameterException` — 400
+> - `MissingServletRequestPartException` — 400
+> - `ServletRequestBindingException` — 400
+> - `MethodArgumentNotValidException` — 400 
+> - `HandlerMethodValidationException` — 400 (`@Validated` + `@RequestParam`/`@PathVariable`)
+> - `NoHandlerFoundException` — 404
+> - `NoResourceFoundException` — 404 (URL 오타가 여기)
+> - `AsyncRequestTimeoutException` — **503**
+> - `ErrorResponseException` — 가변 (예외가 들고 있는 값)
+> - `MaxUploadSizeExceededException` — 413
+> - `ConversionNotSupportedException` — **500**
+> - `TypeMismatchException` — 400
+> - `HttpMessageNotReadableException` — 400 (깨진 JSON이 여기)
+> - `HttpMessageNotWritableException` — **500**
+> - `MethodValidationException` — **500**
+> - `AsyncRequestNotUsableException` — 응답 불가 (클라이언트가 이미 끊긴 상태)
+
+
+- **바로잡을 것 ①**: `handleException` 은 `public final` 이다. ==오버라이드 자체가 불가능하다.== "오버라이드하면 개별 분기를 안 타게 될 위험" 같은 얘기는 성립하지 않는다. 우리가 손댈 수 있는 건 `protected` 분기 메서드들과 `handleExceptionInternal` 뿐이고, 이게 출구 하나만 잡는 방식이 정석인 이유이기도 하다.
+- **바로잡을 것 ②**: 상태코드는 `handleException` 이 정하는 게 아니다. 리터럴로 박힌 건 5개뿐이다(`ConversionNotSupported`→500, `TypeMismatch`→400, `HttpMessageNotReadable`→400, `HttpMessageNotWritable`→500, `MethodValidation`→500). ==나머지 15종은 예외 객체가 자기 상태코드를 들고 있다== — Spring 6부터 이 예외들이 `ErrorResponse` 인터페이스를 구현하고, `handleException` 은 `ex.getStatusCode()` 를 꺼내 넘길 뿐이다. `ErrorResponseException` 이 "가변"인 것도 같은 이유다.
+- **바로잡을 것 ③**: "표준 예외 = 전부 4xx"가 아니다. **5종이 5xx**다(`MissingPathVariable` 500, `ConversionNotSupported` 500, `HttpMessageNotWritable` 500, `MethodValidation` 500, `AsyncRequestTimeout` 503). 그런데 현재 우리 `handleExceptionInternal` 은 상태코드를 안 보고 무조건 `log.warn` 이다 → ==`@PathVariable` 이름을 잘못 적어 500이 나도 warn으로 조용히 지나가고 스택트레이스도 없다.== `handleCustomException` 에서 고친 것과 같은 `statusCode.is5xxServerError()` 분기가 여기에도 필요하다. (아직 안 고침 — TODO)
+- **연결**: → [[TroubleShooting]]
+
 ## ③ 용어 카드 (역참조)
 
-> [!quote]- 용어 9개
+> [!quote]- 용어 15개
 > - **commence()**: `AuthenticationEntryPoint` 의 유일한 메서드. "인증을 개시하라". REST에선 401 JSON 작성 역할. → Q.commence 이게 뭔데
 > - **DispatcherServlet 경계**: @ExceptionHandler가 개입 가능한 안쪽과 필터가 도는 바깥쪽을 가르는 선. → Q.Throwable로 넓혀도
 > - **`jakarta.servlet.error.exception`**: ERROR 디스패치 때 원래 예외가 담기는 request attribute. 다시 던져지는 게 아니라 여기 실려서 전달된다. → Q.Throwable로 넓혀도
@@ -159,10 +257,16 @@ ExceptionTranslationFilter 의 catch → 익명? EntryPoint(401) : AccessDeniedH
 > - **AnonymousAuthenticationToken**: 인증 안 된 상태를 null이 아닌 객체로 표현한 것. 401/403 판정의 근거. → Q.401과 403은 어디서 갈리나
 > - **AuthenticationTrustResolver**: 인증 객체가 익명인지 판정하는 컴포넌트. `isAuthenticated()` 대신 이걸 쓴다. → Q.401과 403은 어디서 갈리나
 > - **인증 vs 인가**: 인증=너 누구냐(JwtFilter) / 인가=그거 해도 되냐(AuthorizationFilter). → Q.어느 필터에서 거부되나
+> - **ResponseEntityExceptionHandler**: 스프링 MVC 표준 예외 20종을 이미 처리할 줄 아는 부모 클래스. 상속하면 그 처리를 물려받는다. → Q.handleExceptionInternal 이거는 뭐야
+> - **handleException**: 위 20종의 `@ExceptionHandler` 가 붙은 유일한 진입점. `public final` 이라 오버라이드 불가. → Q.내가 이해한 흐름이 맞나
+> - **handleExceptionInternal**: 모든 타입별 분기가 마지막에 거쳐가는 공통 출구. 여기만 오버라이드하면 응답 본문이 통일된다. → Q.handleExceptionInternal 이거는 뭐야
+> - **핸들러 우선순위**: 스프링은 던져진 예외 타입에 가장 구체적으로 일치하는 `@ExceptionHandler` 를 고른다. `Exception.class` 가 최후 폴백인 이유. → Q.왜 표준 예외는 Exception.class로 안 가
+> - **ProblemDetail**: RFC 7807 형식(`type/title/status/detail/instance`). 오버라이드하지 않으면 부모가 이 형태로 본문을 만든다. → Q.handleExceptionInternal 이거는 뭐야
+> - **ErrorResponse(인터페이스)**: Spring 6부터 표준 예외들이 구현. 예외가 자기 상태코드를 들고 다니게 만든 것. → Q.내가 이해한 흐름이 맞나
 
 ## ④ 내가 틀렸던 것 (오개념 로그)
 
-> [!quote]- 오개념 11건
+> [!quote]- 오개념 17건
 > | 내가 생각했던 것 | 실제 |
 > |---|---|
 > | `@RestControllerAdvice` 가 애플리케이션의 모든 예외를 감시한다 | 능동적 감시자가 아니다. DispatcherServlet이 불러줘야 돈다 |
@@ -176,3 +280,10 @@ ExceptionTranslationFilter 의 catch → 익명? EntryPoint(401) : AccessDeniedH
 > | 우리가 401/403을 두 갈래로 분리했다 | 스프링이 이미 두 슬롯을 뚫어뒀고 구현체만 갈아끼웠다 |
 > | `AuthorizationFilter` 가 401/403을 구분해 던진다 | 항상 `AccessDeniedException` 하나만. 구분은 `ExceptionTranslationFilter` 의 몫 |
 > | `isAuthenticated()` 가 true면 로그인된 것 | 익명 토큰도 true다. 타입으로 판정해야 한다 |
+> | `handleException` 을 오버라이드해서 동작을 바꿀 수 있다 | `public final` 이라 오버라이드 자체가 불가능하다 |
+> | `handleExceptionInternal` 이 예외를 "잡는다" | 잡지 않는다. `@ExceptionHandler` 가 없다. 출구에서 호출될 뿐이고, 잡는 건 `handleException` 한 곳 |
+> | 우리가 붙인 `@ExceptionHandler` 도 `handleExceptionInternal` 을 거친다 | 안 거친다. 자기 메서드에서 응답을 만들고 끝난다 (409 로그에 그 줄이 없는 것으로 확인) |
+> | `handleException` 이 상태코드를 정한다 | 리터럴은 5개뿐. 나머지 15종은 예외 객체가 `ErrorResponse` 구현으로 자기 상태코드를 들고 있다 |
+> | 스프링 MVC 표준 예외는 전부 4xx다 | 5종이 5xx다(500 넷, 503 하나). 그래서 `log.warn` 일괄 처리에 구멍이 생긴다 |
+> | `@ExceptionHandler(Exception.class)` 가 표준 예외까지 삼킨다 | 더 구체적인 핸들러가 먼저 이긴다. `Exception` 은 최후 폴백 |
+</content>

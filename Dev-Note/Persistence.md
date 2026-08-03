@@ -1,6 +1,6 @@
 # Persistence (JPA · Hibernate · JDBC · JPQL)
 
-> **주제**: 영속성 계층 개념 Q&A · 갱신: 2026-07-24 · 상태: 진행중
+> **주제**: 영속성 계층 개념 Q&A · 갱신: 2026-08-04 · 상태: 진행중
 > **태그**: #JPA #Hibernate #ORM #영속성 #엔티티매핑
 
 ## ① 큰 그림 (지도)
@@ -22,7 +22,7 @@
 - import 경로가 소속을 말해준다: `jakarta.persistence.*` = JPA표준, `org.springframework.*` = Spring.
 - **식별자(PK)는 항상 "하나의 객체"** 로 다뤄진다. `find(Class, Object)`가 값을 하나만 받기 때문. 그래서 단일키든 복합키든 식별자 타입에 붙는 요구사항(직렬화 가능 등)이 동일하게 적용된다. 복합키는 그 "하나의 객체"를 우리가 직접 만들어야 하는 경우일 뿐이다.
 - 복합키 매핑의 갈래: `@EmbeddedId`(ID 클래스를 엔티티 필드로 품음) vs `@IdClass`(바깥에 둠) → 어느 쪽이든 ID 클래스는 필요하고, 연관관계와 함께 쓰면 `@MapsId`로 FK 컬럼을 PK에 재사용한다.
-- 이 노트가 다루는 갈래: 3층 구조 · PK 채번(`@GeneratedValue`) · **복합키/식별자 타입의 요구사항** · 필드 타입 매핑(`BigDecimal`·타임존/`Instant`·**enum**) · 기본값 처리(DB DEFAULT vs 자바 초기화) · 생명주기 콜백(`@PrePersist`/`@PreUpdate`)
+- 이 노트가 다루는 갈래: 3층 구조 · PK 채번(`@GeneratedValue`) · **복합키/식별자 타입의 요구사항** · 필드 타입 매핑(`BigDecimal`·타임존/`Instant`·**enum**) · 기본값 처리(DB DEFAULT vs 자바 초기화) · 생명주기 콜백(`@PrePersist`/`@PreUpdate`) · **삭제 전파(cascade)를 DB와 JPA 중 어느 층에 둘 것인가** · **부분 수정(dirty checking vs 벌크 UPDATE)**
 
 ## ② 질문 트리 (본문)
 
@@ -194,9 +194,96 @@ custom()   개인 테스트케이스라 순서 무의미        → 항상 0
   이럴 때 정적 팩토리를 나눠두면 각자 다르게 처리할 수 있다. 생성자 하나로 다 받으면 이 차이를 표현할 방법이 없다.
 - **연결**: → 위 Q(NOT NULL DEFAULT 있는 컬럼은 어떻게 처리해?)의 실전 적용편.
 
+---
+
+### 2026-08-04
+
+#### Q. 원래 DB에 cascade를 걸거나 엔티티에 cascade를 거는 것 둘 중에 하나를 해야 하는 거야?
+
+- **한줄답**: ==둘 중 하나를 고르는 게 아니라 층이 다른 별개 장치다.== 없거나, 하나거나, 둘 다일 수 있다.
+- **원리**: 이름은 같은 "cascade"지만 **실행 주체와 적용 범위**가 다르다.
+    - **DB `ON DELETE CASCADE`** — DB 엔진이 실행한다. psql·배치·다른 서비스까지 **모든 접근 경로**에 적용된다.
+    - **JPA `cascade = CascadeType.REMOVE`** — Hibernate가 실행한다. **그 세션을 통과한 삭제에만** 적용된다.
+- **네 가지 경우**:
+    - **아무것도 안 검** — 부모를 지우는 순간 FK 위반으로 막힌다. 자식을 치울 방법이 어떤 형태로든 있어야 한다(자식 리포지토리의 `deleteBy...`를 직접 부르는 것도 그중 하나).
+    - **DB에만** — `DELETE` 한 문장으로 끝나고, 누가 지우든 무결성이 지켜진다. 대신 Hibernate가 모르므로 ==영속성 컨텍스트의 1차 캐시에 올려둔 자식 엔티티는 DB에서 사라졌는데도 남아 유령 데이터가 된다.== 자식의 `@PreRemove` 콜백도 돌지 않는다.
+    - **JPA에만** — 생명주기 콜백이 돌고 영속성 컨텍스트가 일관된다. 대신 **자식을 전부 SELECT한 뒤 하나씩 DELETE**한다(제출 1000건이면 DELETE 1000번). Hibernate를 안 거치는 삭제에는 무방비다.
+    - **둘 다** — 동작은 하지만 Hibernate가 먼저 지워버려 DB의 CASCADE는 지울 게 남지 않는다. 쿼리만 낭비된다.
+- **판단 기준**: DB 레벨은 성능이 아니라 **무결성 보장**이라 거의 항상 걸어둔다. JPA cascade는 부모에서 자식 컬렉션을 실제로 탐색하고, 자식 수가 적을 때만 값어치가 있다.
+- **주의**: `cascade = REMOVE`와 `orphanRemoval = true`는 다르다.
+    - `cascade = REMOVE` — **부모를 지울 때** 자식도 지운다.
+    - `orphanRemoval = true` — 컬렉션에서 **자식을 빼기만 해도** 그 행이 지워진다.
+    - 둘 다 `@OneToMany` 컬렉션 매핑이 있어야 쓸 수 있다. 컬렉션을 안 두면 선택지 자체가 없다.
+- **연결**: → [[DbBasics]] (FK 제약과 `ON DELETE` 규칙) · → 위 Q(복합키를 쓸 때 왜 ID 클래스를 따로 만들어야 하나) — `ProblemTag`·`UserProblem` 같은 연결 테이블이 cascade의 주 대상이다
+
+#### Q. PATCH로 부분 수정할 때 리포지토리에서 update 하는 방법과 엔티티를 고쳐서 영속성 컨텍스트에 맡기는 방법 중 뭐가 맞아? `@DynamicUpdate` 같은 것도 있던데
+
+- **한줄답**: ==dirty checking 이 정답이고, `@DynamicUpdate` 는 그것을 대체하는 게 아니라 그것이 만드는 SQL 을 좁히는 설정이다.== 벌크 UPDATE는 부분 수정에 안 맞는다.
+- **원리**: 세 가지는 서로 대체재가 아니다.
+    - **dirty checking** — 영속 엔티티의 필드를 바꾸면 flush 시점에 스냅샷과 비교해 UPDATE가 자동 생성된다. `save()`를 부르지 않는다. `@PreUpdate` 같은 생명주기 콜백이 돌고 1차 캐시도 일관된다.
+    - **벌크 UPDATE (`@Modifying @Query`)** — 조회 없이 UPDATE 한 방. 대신 ==영속성 컨텍스트를 우회하므로 `@PreUpdate` 가 돌지 않아 `updated_at` 이 안 찍히고==, 1차 캐시는 옛 값을 든 채 남는다. 게다가 PATCH는 오는 필드 조합이 매번 달라 쿼리를 미리 만들어둘 수 없다.
+    - **`@DynamicUpdate`** — dirty checking이 만드는 UPDATE 문에 **바뀐 컬럼만** 싣게 하는 설정. 방법이 아니라 옵션이다.
+- **주의**:
+    - 클래스에 `@Transactional(readOnly = true)`가 걸려 있으면 스냅샷을 안 떠서 **dirty checking이 동작하지 않는다.** 수정 메서드에 `@Transactional`을 따로 붙여야 하고, 안 붙이면 예외 없이 **조용히 반영되지 않는다.**
+    - PATCH DTO의 숫자 필드는 래퍼 타입(`Short`)으로 받는다. 원시 `short`는 안 보내면 `0`이 들어가 "0으로 바꿔달라"와 구분되지 않는다.
+- **연결**: → 아래 Q(왜 전체 컬럼이 UPDATE 되나) · → [[DbBasics]] (벌크 연산이 곧 SQL 한 문장이라는 것)
+
+#### Q. dirty checking으로 하면 한 컬럼만 바꿔도 전체 컬럼이 UPDATE 되던데, 불필요한 일 아냐?
+
+- **한줄답**: ==버그가 아니라 SQL 을 재사용하려고 일부러 그렇게 만든 기본값이다.==
+- **원리**: Hibernate는 엔티티마다 UPDATE 문을 **하나만 미리 만들어 캐시**해둔다.
+
+    ```sql
+    update problem set problem_num=?, title=?, ..., output_format=? where id=?
+    ```
+
+    - 어떤 필드가 바뀌든 **같은 SQL**이라 문장을 다시 조립할 필요가 없고, DB 쪽 파싱·실행계획 캐시도 그대로 탄다.
+    - 그래서 컬럼이 작고 수정이 잦은 테이블에서는 **전체 컬럼 UPDATE가 오히려 이득**이다.
+- **언제 손해로 뒤집히나**: 큰 컬럼이 섞여 있을 때다. `problem`은 `description`·`input_format`·`output_format`이 TEXT라, 제목 한 줄 고치는 데 지문 전체가 다시 실려 나간다.
+- **주의 — 이 SQL 문 캐시는 1차 캐시가 아니다**: `EntityManagerFactory`(SessionFactory) 수준에 있어 **앱 전체가 공유**하고 앱이 살아있는 내내 유지된다. 1차 캐시는 트랜잭션마다 생겼다 사라지고 담는 것도 엔티티 인스턴스다.
+- **`@DynamicUpdate` 의 거래**: 바뀐 컬럼만 싣는 대신 ==UPDATE 문을 매번 새로 조립하므로 SQL 재사용을 포기한다.== 켤지 말지는 실제 UPDATE 문을 눈으로 보고 정한다.
+- **`@DynamicInsert` 는 다른 문제**: INSERT에서 null 컬럼을 빼 DB의 `DEFAULT`를 살리는 설정이다. 자바 필드 초기화로 기본값을 주고 있으면 필요 없다.
+- **연결**: → 위 Q(PATCH 부분 수정 세 방법) · → 아래 Q(쓰기 지연과 dirty checking의 관계) · → 위 Q(NOT NULL DEFAULT 있는 컬럼은 default 값을 어떻게 처리해?)
+
+#### Q. 그러면 dirty checking 안에 쓰기 지연이 있는 건가? 별개인가? 쓰기 지연은 Hibernate 얘기인가?
+
+- **한줄답**: ==포함 관계가 아니라 영속성 컨텍스트 안에 나란히 있는 별개 장치다.== 차이는 "할 일이 언제 만들어지는가"다.
+- **원리**:
+    - **INSERT · DELETE** — `em.persist` / `em.remove`를 부르는 **그 순간** 작업이 큐(`ActionQueue`)에 등록되고 flush 때 실행된다. 이것이 쓰기 지연이다.
+    - **UPDATE** — setter를 불러도 아무것도 등록되지 않는다. ==flush 시점에 dirty checking 이 스냅샷과 비교해 그때 비로소 UPDATE 를 만들어낸다.== flush 전까지 그 UPDATE는 존재하지도 않는다.
+    - 결과만 보면 둘 다 flush 때 SQL이 나가 하나처럼 보이지만, 쓰기 지연은 **타이밍**이고 dirty checking은 **발견**이다.
+- **JPA 스펙과의 관계**: 둘 다 스펙 용어가 아니라 Hibernate의 구현 방식을 부르는 이름이다. `jakarta.persistence` 어디에도 이 이름은 없어서 스펙 문서를 검색하면 안 나온다.
+    - 스펙이 정하는 것 — "flush 시점에 DB와 동기화된다", "managed 엔티티의 변경은 flush 때 반영된다".
+    - Hibernate가 택한 구현 — 작업을 큐에 모으고, 읽을 때 스냅샷을 떠 비교한다.
+    - 구현 방식은 하나가 아니다. Hibernate는 **바이트코드를 조작해 setter 호출을 가로채는 방식**도 옵션으로 지원하며, 그러면 스냅샷 메모리를 쓰지 않는다.
+- **연결**: → 위 Q(PATCH 부분 수정 세 방법) · → 위 Q(왜 전체 컬럼이 UPDATE 되나)
+
+#### Q. dirty checking이 되려면 엔티티 안에 메서드를 둬야 하는 거야? 리포지토리에 update를 두면 dirty checking이 아닌 거지?
+
+- **한줄답**: ==dirty checking 의 조건은 "영속 객체의 필드가 바뀔 것" 하나뿐이고, 엔티티에 메서드가 필요한 건 JPA 때문이 아니라 자바의 `private` 때문이다.== 리포지토리의 벌크 update는 dirty checking이 아닌 게 맞다.
+- **원리**: 조건은 셋이고, **어느 코드가 값을 바꿨는지는 들어 있지 않다.**
+    - ① 엔티티가 영속 상태일 것
+    - ② 값이 바뀔 것
+    - ③ flush가 일어날 것
+- **그런데 왜 엔티티에 메서드를 두게 되나**: 자바의 접근 제어자 때문이다. `private` 필드는 밖에서 못 바꾸니 엔티티가 통로를 열어줘야 하고, 그 통로가 `update()`든 `setTitle()`이든 dirty checking 입장에서는 **구분이 없다**. 둘 다 결국 `this.title = ...` 이다.
+
+    ```
+    dirty checking 의 조건 : 영속 객체의 필드가 바뀔 것
+             ↓
+    자바의 제약            : private 필드는 밖에서 못 바꾼다
+             ↓
+    그래서 필요한 것        : 엔티티가 여는 통로(메서드)
+    ```
+
+- **리포지토리의 벌크 update는 왜 다른가**: 엔티티를 거치지 않고 SQL을 직접 날리기 때문이다. 다만 ==무관한 게 아니라 우회하는 것이라, 이미 읽어둔 엔티티가 있으면 1차 캐시는 옛 값을 든 채 남는다.== 그래서 `@Modifying(clearAutomatically = true)` 옵션이 있다.
+- **주의**:
+    - `update()`는 `JpaRepository`에 **없다.** `save`·`delete`는 "영속성 컨텍스트에 등록/해제"라는 명시적 행위라 API가 필요하지만, 수정은 이미 관리 중인 객체를 고치는 것이라 호출할 게 없다. **누락이 아니라 의도된 부재**다.
+    - `@Setter`를 열지 말자는 건 dirty checking과 무관한 **설계 판단**이다. 열면 `solvedCount`·`acceptedCount` 처럼 채점 결과로만 변해야 할 컬럼까지 아무 데서나 덮어쓸 수 있게 된다.
+- **연결**: → 위 Q(PATCH 부분 수정 세 방법) · → 위 Q(쓰기 지연과 dirty checking의 관계)
+
 ## ③ 용어 카드 (역참조)
 
-> [!quote]- 용어 17개
+> [!quote]- 용어 24개
 > - **JPA**: 자바 ORM 표준 스펙(`jakarta.persistence`). 어노테이션·인터페이스 규칙만 정의. → ① 큰 그림
 > - **Hibernate**: JPA 구현체(엔진). 실제 SQL 생성·실행, 1차 캐시/dirty checking. → ① 큰 그림
 > - **Spring Data JPA**: JPA/Hibernate를 Spring에서 쉽게 쓰게 감싼 계층. `JpaRepository`, 메서드 이름 쿼리. → ① 큰 그림
@@ -214,10 +301,17 @@ custom()   개인 테스트케이스라 순서 무의미        → 항상 0
 > - **네이티브 ENUM (Postgres)**: `CREATE TYPE ... AS ENUM`으로 만든 **독립 타입**. VARCHAR가 아니라 별개 타입이라 varchar 파라미터를 그대로 못 받는다. 정렬은 **선언 순서**를 따른다. → Q(두 줄이 무슨 말?)
 > - **@Enumerated**: 자바 enum을 이름(STRING)으로 쓸지 순서번호(ORDINAL)로 쓸지 결정. **생략하면 ORDINAL**. → Q(두 줄이 무슨 말?)
 > - **@JdbcTypeCode**: 값을 어떤 JDBC/SQL 타입으로 바인딩할지 지정(Hibernate 6+). `SqlTypes.ENUM`=6000(인라인), `NAMED_ENUM`=6001(이름 붙은 타입). → Q(두 줄이 무슨 말?)
+> - **영속성 컨텍스트**: 트랜잭션 동안 엔티티를 관리하는 공간. **1차 캐시**(식별자→엔티티) · 쓰기 지연 SQL 저장소 · dirty checking용 스냅샷 · 프록시 관리를 모두 포함한다. "1차 캐시"는 그중 한 구성요소다. → Q(둘 중 하나를 해야 하나?)
+> - **ON DELETE CASCADE**: FK 제약의 삭제 규칙. 부모 행이 지워지면 DB 엔진이 자식 행을 함께 지운다. 접근 경로와 무관하게 적용된다. → Q(둘 중 하나를 해야 하나?)
+> - **orphanRemoval**: 컬렉션에서 빠진 자식(고아)을 DELETE하는 JPA 옵션. `cascade = REMOVE`(부모 삭제 시)와 발동 조건이 다르다. → Q(둘 중 하나를 해야 하나?)
+> - **dirty checking (변경 감지)**: 영속 엔티티의 현재 값과 스냅샷을 flush 시점에 비교해 UPDATE 를 자동 생성하는 것. `save()` 호출이 필요 없다. 에러 메시지·공식 문서는 영어 용어로 쓰여 있다. → Q(PATCH 부분 수정?)
+> - **쓰기 지연 (transactional write-behind)**: `persist`/`remove` 로 등록된 작업을 flush 까지 모아뒀다 실행하는 것. UPDATE 는 여기 쌓이지 않고 flush 때 dirty checking 이 만들어낸다. → Q(쓰기 지연과 dirty checking 관계?)
+> - **스냅샷 (snapshot)**: 엔티티를 읽을 때 영속성 컨텍스트가 떠두는 복사본. dirty checking 의 비교 기준이며, `readOnly = true` 면 뜨지 않아 수정이 반영되지 않는다. → Q(왜 전체 컬럼이 UPDATE 되나?)
+> - **@DynamicUpdate**: 바뀐 컬럼만 UPDATE 문에 싣는 Hibernate 설정. 대신 SQL 을 매번 새로 조립해 재사용을 포기한다. → Q(왜 전체 컬럼이 UPDATE 되나?)
 
 ## ④ 내가 틀렸던 것 (오개념 로그)
 
-> [!quote]- 오개념 16건
+> [!quote]- 오개념 21건
 > | 내가 생각했던 것 | 실제 |
 > |---|---|
 > | `@GeneratedValue`를 안 붙이면 AUTO로 자동생성된다 | 안 붙이면 자동생성 자체가 없음(내가 id 대입). **붙이고 strategy 생략**해야 AUTO |
@@ -236,3 +330,8 @@ custom()   개인 테스트케이스라 순서 무의미        → 항상 0
 > | `@JdbcTypeCode`는 enum 매핑에 늘 필요하다 | 평소엔 `@Enumerated(STRING)` 하나면 됨. **PostgreSQL + 네이티브 ENUM**일 때만 추가 |
 > | psql에서 `'UNSOLVED'`가 들어가니 JPA에서도 된다 | 리터럴은 타입 미정이라 캐스팅됨. JDBC 파라미터는 타입이 못박혀 캐스팅 안 됨 |
 > | 생성자로도 받고 필드 초기화도 해두면 안전망이 된다 | 필드 초기화 → 생성자 본문 순이라 **항상 덮어써짐**. null을 넘기면 그대로 null이 되어 안전망처럼 보이지만 아니다 |
+> | DB cascade와 JPA cascade 중 하나를 골라야 한다 | 층이 다른 별개 장치. 둘 다/하나만/아무것도 안 걺이 전부 가능하고, 각각 적용 범위가 다르다 |
+> | 한 컬럼만 바꿨는데 전체 컬럼이 UPDATE 되는 건 낭비다 | SQL 을 재사용하려는 의도된 기본값. 컬럼이 작으면 오히려 이득이고, TEXT 가 크면 그때 `@DynamicUpdate` 를 검토한다 |
+> | 부분 수정은 리포지토리에서 update 쿼리를 쓰면 된다 | 벌크 UPDATE 는 `@PreUpdate` 를 건너뛰고 1차 캐시를 어긋나게 한다. PATCH 는 필드 조합이 가변이라 쿼리를 미리 만들 수도 없다 |
+> | 쓰기 지연 저장소에 UPDATE 도 쌓인다 | UPDATE 는 flush 때 dirty checking 이 만들어낸다. setter 를 불러도 그 시점에는 아무것도 등록되지 않는다 |
+> | dirty checking 이 되려면 엔티티에 전용 메서드를 정의해야 한다 | 조건은 영속 객체의 필드가 바뀌는 것뿐. setter 로 바꿔도 똑같이 돈다. 메서드가 필요한 건 private 필드를 밖에서 못 바꾸기 때문이다 |
