@@ -1,6 +1,6 @@
 # Persistence (JPA · Hibernate · JDBC · JPQL)
 
-> **주제**: 영속성 계층 개념 Q&A · 갱신: 2026-08-04 · 상태: 진행중
+> **주제**: 영속성 계층 개념 Q&A · 갱신: 2026-08-05 · 상태: 진행중
 > **태그**: #JPA #Hibernate #ORM #영속성 #엔티티매핑
 
 ## ① 큰 그림 (지도)
@@ -22,7 +22,23 @@
 - import 경로가 소속을 말해준다: `jakarta.persistence.*` = JPA표준, `org.springframework.*` = Spring.
 - **식별자(PK)는 항상 "하나의 객체"** 로 다뤄진다. `find(Class, Object)`가 값을 하나만 받기 때문. 그래서 단일키든 복합키든 식별자 타입에 붙는 요구사항(직렬화 가능 등)이 동일하게 적용된다. 복합키는 그 "하나의 객체"를 우리가 직접 만들어야 하는 경우일 뿐이다.
 - 복합키 매핑의 갈래: `@EmbeddedId`(ID 클래스를 엔티티 필드로 품음) vs `@IdClass`(바깥에 둠) → 어느 쪽이든 ID 클래스는 필요하고, 연관관계와 함께 쓰면 `@MapsId`로 FK 컬럼을 PK에 재사용한다.
-- 이 노트가 다루는 갈래: 3층 구조 · PK 채번(`@GeneratedValue`) · **복합키/식별자 타입의 요구사항** · 필드 타입 매핑(`BigDecimal`·타임존/`Instant`·**enum**) · 기본값 처리(DB DEFAULT vs 자바 초기화) · 생명주기 콜백(`@PrePersist`/`@PreUpdate`) · **삭제 전파(cascade)를 DB와 JPA 중 어느 층에 둘 것인가** · **부분 수정(dirty checking vs 벌크 UPDATE)**
+
+두 번째 축 — **변경이 SQL 이 되어 DB 에 닿기까지는 3단계로 끊겨 있다.** 지금 어느 단계까지 왔는지가 문제의 성격을 가른다.
+
+```
+[자바 메모리]  엔티티 필드에 대입           ← SQL 0개. DB 쪽엔 아무 일도 안 일어났다
+     ↓ flush
+[SQL 실행]     스냅샷 비교 → SQL 조립 → JDBC 전송 → DB 실행   ← 여기서 행 락이 걸린다
+     ↓ commit
+[확정]         락 해제, 다른 트랜잭션에 보이기 시작
+```
+
+- **flush 안은 다시 두 단계로 나뉜다.** 이 둘을 한 덩어리로 보면 "바뀐 컬럼을 아는데 왜 전부 쓰나"가 안 풀린다.
+    - **1단계 dirty 판정** — 스냅샷과 현재 값을 비교해 UPDATE 를 쏠지 말지만 정한다.
+    - **2단계 SQL 조립** — SET 절의 모양을 정한다. 기본은 전 컬럼 템플릿, `@DynamicUpdate` 면 dirty 컬럼만.
+- **flush 안에서 SQL 이 나가는 순서는 액션 큐가 타입별로 정한다** — INSERT → UPDATE → 컬렉션 → DELETE. 코드에 적은 호출 순서와 무관하다. 자연키를 PK 로 쓰는 테이블에서 "지우고 다시 넣기"가 터지는 지점이 여기다.
+- **벌크 연산(`@Modifying`)은 이 그림 전체를 우회한다** — 액션 큐도 영속성 컨텍스트도 거치지 않고 호출 즉시 DB 로 간다. 위 충돌을 푸는 길이자, 1차 캐시가 어긋나는 대가를 치르는 길이다.
+- 이 노트가 다루는 갈래: 3층 구조 · PK 채번(`@GeneratedValue`) · **복합키/식별자 타입의 요구사항** · 필드 타입 매핑(`BigDecimal`·타임존/`Instant`·**enum**) · 기본값 처리(DB DEFAULT vs 자바 초기화) · 생명주기 콜백(`@PrePersist`/`@PreUpdate`) · **삭제 전파(cascade)를 DB와 JPA 중 어느 층에 둘 것인가** · **부분 수정(dirty checking vs 벌크 UPDATE)** · **flush 시점과 액션 큐 실행 순서**
 
 ## ② 질문 트리 (본문)
 
@@ -243,7 +259,7 @@ custom()   개인 테스트케이스라 순서 무의미        → 항상 0
 - **주의 — 이 SQL 문 캐시는 1차 캐시가 아니다**: `EntityManagerFactory`(SessionFactory) 수준에 있어 **앱 전체가 공유**하고 앱이 살아있는 내내 유지된다. 1차 캐시는 트랜잭션마다 생겼다 사라지고 담는 것도 엔티티 인스턴스다.
 - **`@DynamicUpdate` 의 거래**: 바뀐 컬럼만 싣는 대신 ==UPDATE 문을 매번 새로 조립하므로 SQL 재사용을 포기한다.== 켤지 말지는 실제 UPDATE 문을 눈으로 보고 정한다.
 - **`@DynamicInsert` 는 다른 문제**: INSERT에서 null 컬럼을 빼 DB의 `DEFAULT`를 살리는 설정이다. 자바 필드 초기화로 기본값을 주고 있으면 필요 없다.
-- **연결**: → 위 Q(PATCH 부분 수정 세 방법) · → 아래 Q(쓰기 지연과 dirty checking의 관계) · → 위 Q(NOT NULL DEFAULT 있는 컬럼은 default 값을 어떻게 처리해?)
+- **연결**: → 위 Q(PATCH 부분 수정 세 방법) · → 아래 Q(쓰기 지연과 dirty checking의 관계) · → 위 Q(NOT NULL DEFAULT 있는 컬럼은 default 값을 어떻게 처리해?) · → 아래 Q(update 쿼리 자체를 실행을 시키는거야?, 2026-08-05)
 
 #### Q. 그러면 dirty checking 안에 쓰기 지연이 있는 건가? 별개인가? 쓰기 지연은 Hibernate 얘기인가?
 
@@ -256,7 +272,7 @@ custom()   개인 테스트케이스라 순서 무의미        → 항상 0
     - 스펙이 정하는 것 — "flush 시점에 DB와 동기화된다", "managed 엔티티의 변경은 flush 때 반영된다".
     - Hibernate가 택한 구현 — 작업을 큐에 모으고, 읽을 때 스냅샷을 떠 비교한다.
     - 구현 방식은 하나가 아니다. Hibernate는 **바이트코드를 조작해 setter 호출을 가로채는 방식**도 옵션으로 지원하며, 그러면 스냅샷 메모리를 쓰지 않는다.
-- **연결**: → 위 Q(PATCH 부분 수정 세 방법) · → 위 Q(왜 전체 컬럼이 UPDATE 되나)
+- **연결**: → 위 Q(PATCH 부분 수정 세 방법) · → 위 Q(왜 전체 컬럼이 UPDATE 되나) · → 아래 Q(update 쿼리 자체를 실행을 시키는거야?, 2026-08-05)
 
 #### Q. dirty checking이 되려면 엔티티 안에 메서드를 둬야 하는 거야? 리포지토리에 update를 두면 dirty checking이 아닌 거지?
 
@@ -279,11 +295,79 @@ custom()   개인 테스트케이스라 순서 무의미        → 항상 0
 - **주의**:
     - `update()`는 `JpaRepository`에 **없다.** `save`·`delete`는 "영속성 컨텍스트에 등록/해제"라는 명시적 행위라 API가 필요하지만, 수정은 이미 관리 중인 객체를 고치는 것이라 호출할 게 없다. **누락이 아니라 의도된 부재**다.
     - `@Setter`를 열지 말자는 건 dirty checking과 무관한 **설계 판단**이다. 열면 `solvedCount`·`acceptedCount` 처럼 채점 결과로만 변해야 할 컬럼까지 아무 데서나 덮어쓸 수 있게 된다.
-- **연결**: → 위 Q(PATCH 부분 수정 세 방법) · → 위 Q(쓰기 지연과 dirty checking의 관계)
+- **연결**: → 위 Q(PATCH 부분 수정 세 방법) · → 위 Q(쓰기 지연과 dirty checking의 관계) · → 아래 Q(insert를 delete 보다 먼저 해서 복합키 중복이 생긴다는거야?, 2026-08-05)
+
+---
+
+### 2026-08-05
+
+#### Q. 영속성 컨텍스트가 기존의 스냅샷하고 변경이 되었을 때 update를 실행한다는거잖아? 그러면 그 update 쿼리 자체를 실행을 시키는거야?
+
+- **한줄답**: 진짜로 DB 에 전송되어 실행된다. 다만 ==flush 와 commit 은 다른 시점==이고, flush 안은 다시 "쏠지 말지"와 "어떤 모양으로 쏠지" 두 단계로 나뉜다.
+- **원리** — 시작 → 과정 → 결과:
+    - [시작] 엔티티 필드에 대입 — 이 시점엔 SQL 0개다. 자바 객체의 필드만 바뀐다(쓰기 지연). dirty checking 은 아직 돌지 않는다
+    - [과정] flush 1단계 **dirty 판정** — 스냅샷(로드 시점 값의 복사본)과 현재 값을 필드별로 비교한다. 하나라도 다르면 dirty 확정, 전부 같으면 **UPDATE 자체가 안 나간다**
+    - [과정] flush 2단계 **SQL 조립** — 기본은 부팅 때 `EntityPersister` 에 만들어둔 전 컬럼 템플릿을 꺼내 쓰고, `@DynamicUpdate` 면 그 자리에서 dirty 컬럼만으로 조립한다
+    - [과정] `PreparedStatement` 에 담아 `?` 자리에 현재 값을 바인딩하고 `executeUpdate()` — 여기서 **DB 가 실제로 실행**하고 해당 행에 배타 락이 걸린다
+    - [결과] commit 에서 확정된다. 그전까지는 다른 트랜잭션에 안 보이고(Postgres 기본 READ COMMITTED), 예외가 나면 롤백되어 없던 일이 된다
+- **호출되는 "update 메서드" 는 없다**: SQL 문자열을 조립해 실행하는 평범한 JDBC 다. ==UPDATE 는 호출하는 게 아니라 flush 때 상태 비교의 부산물로 만들어지는 것==이라, `JpaRepository` 에 애초에 `update()` 가 없다.
+- **왜 안 바뀐 컬럼까지 다시 써지나**: 1단계에서 Hibernate 는 어느 컬럼이 바뀌었는지 이미 알면서도 기본 설정에선 SET 절에 안 쓴다. SQL 모양을 하나로 고정해야 prepared statement 캐시가 재사용되기 때문이다.
+    - 그래서 안 바뀐 컬럼에는 **find 할 때 메모리에 올린 값**이 실린다 (DB 의 현재값이 아니다).
+    - 그 사이 다른 트랜잭션이 `submission_count` 를 101 로 올려 커밋해도 로드 시점의 100 이 덮어써진다(lost update). 관리자가 `title` 하나만 고쳤는데 제출 1건이 사라진다.
+    - ==`@DynamicUpdate` 를 켜는 진짜 이유는 성능이 아니라 이것이다.==
+- **flush 가 일어나는 3시점**:
+    - **커밋 직전** — 가장 흔하다. `@Transactional` 메서드가 정상 종료될 때 자동으로 일어난다.
+    - **JPQL 쿼리 실행 직전** — 기본 `FlushMode.AUTO`. 아직 안 나간 변경 때문에 쿼리 결과가 틀리는 걸 막으려고 먼저 flush 한다.
+    - **수동 호출** — `em.flush()`. Spring Data JPA 면 `repository.flush()` / `saveAndFlush()`.
+- **주의**: flush 부터 commit 까지 행 락이 유지되므로, 트랜잭션 안에 외부 I/O(HTTP 호출·메시지 발행)를 넣으면 그 시간만큼 락이 잡힌다. `@TransactionalEventListener(phase = AFTER_COMMIT)` 로 커밋 밖으로 뺀다.
+- **부수 효과**: 응답 DTO 를 서비스 안에서 만들면 아직 `@PreUpdate` 가 안 돌아 `updatedAt` 이 직전 값이다. 값이 기존과 같으면 애초에 dirty 로 안 쳐서 `updated_at` 이 아예 안 바뀐다.
+- **연결**: → 위 Q(dirty checking으로 하면 한 컬럼만 바꿔도 전체 컬럼이 UPDATE 되던데, 2026-08-04) · → 위 Q(그러면 dirty checking 안에 쓰기 지연이 있는 건가, 2026-08-04) · → [[DbBasics]] (트랜잭션 격리 수준과 행 락)
+
+#### Q. problem_tag가 복합키인 경우는 왜 안되는거지? insert를 delete 보다 먼저 하게 되어서 복합키 자체가 중복이 생긴다는거야?
+
+- **한줄답**: 맞다. `deleteAll()` + `saveAll()` 은 둘 다 예약일 뿐이라, flush 때 INSERT 가 먼저 나가 **아직 안 지워진 행**과 키가 겹친다.
+- **먼저 갈라야 할 것 — 무엇이 자동이고 무엇이 우리가 부른 것인가**:
+    - **스칼라 필드 값 변경 → UPDATE** — Hibernate 가 dirty checking 으로 자동 생성한다. `save()` 가 필요 없다.
+    - **`saveAll` → INSERT 예약 / `deleteAll` → DELETE 예약** — ==자동인 건 UPDATE 하나뿐이고 INSERT·DELETE 는 우리가 부른 것이다.==
+    - `problem_tag` 가 UPDATE 대상이 아닌 이유: 두 컬럼이 통째로 PK 라 `(12, graph)` 를 `(12, greedy)` 로 "수정"하면 다른 행이 되어버린다. 행의 정체성 자체가 바뀐다.
+- **원리** — 시작 → 과정 → 결과:
+    - [시작] `problem 12` 의 현재 태그가 `[dp(id=3), graph(id=7)]` 이고, 요청이 `["dp","greedy"]` 다 — dp 는 유지, graph 는 빼고, greedy 추가
+    - [과정] `deleteAll(current)` → 액션 큐에 DELETE 2건 예약. `saveAll(new)` → INSERT 2건 예약. **여기까지 DB 에는 아무것도 안 나갔다**
+    - [과정] flush 가 큐를 비울 때 ==호출 순서가 아니라 타입 순서로 재정렬한다== — INSERT → UPDATE → 컬렉션 → DELETE
+    - [과정] `INSERT (12,3)` 이 가장 먼저 실행된다. 그런데 테이블에는 `(12,3)` 이 아직 살아 있다 (DELETE 는 뒤에 예약돼 있을 뿐이다)
+    - [결과] `duplicate key value violates unique constraint "problem_tag_pkey"` — DELETE 는 실행도 못 해본다
+
+> [!note]- `ActionQueue.executeActions()` 의 8단계 (앞이 INSERT, 끝이 DELETE)
+> - ① orphanRemovals
+> - ② insertions
+> - ③ updates
+> - ④ collectionQueuedOps
+> - ⑤ collectionRemovals
+> - ⑥ collectionUpdates
+> - ⑦ collectionCreations
+> - ⑧ deletions
+
+- **고약한 점**: ==태그가 겹칠 때만 터진다.== `[dp, graph]` → `[greedy, math]` 처럼 완전 교체하면 넣는 키가 기존과 안 겹쳐 통과한다. 테스트는 초록불인데 실사용에서 태그 하나를 유지한 채 보내면 500 이 난다.
+- **`test_case` 는 왜 안 터지나**: PK 가 `id BIGSERIAL` 서로게이트라 새 행이 새 id 를 받아 기존 행과 겹칠 수가 없다. 자연키를 PK 로 쓰는 `problem_tag` 만의 문제다.
+- **해법 — 그 delete 가 "즉시 실행되는" delete 여야 한다**:
+    - **방법 1 (권장) 벌크 `@Modifying` JPQL** — 액션 큐를 거치지 않고 호출 즉시 DB 에서 실행된다. `DELETE` 1번으로 끝난다.
+    - **방법 2 `deleteAll()` 후 `flush()`** — 큐를 강제로 비운다. 엔티티를 로드해야 `remove` 할 수 있어 `SELECT` 1번 + `DELETE` N번이 나간다.
+    - 컬렉션이라도 **행 하나당 SQL 하나**다. `saveAll(3개)` 이면 INSERT 3번이다.
+- **함정**: `@Modifying` 에 `clearAutomatically = true` 를 붙이면 안 된다. 벌크가 영속성 컨텍스트를 우회하니 흔히 같이 쓰는 옵션인데, 컨텍스트가 비워지는 순간 앞에서 수정해둔 엔티티가 준영속이 되어 스칼라 변경이 통째로 사라진다.
+- **HTTP 메서드와는 무관하다**: `PUT /problems/12/tags` 로 엔드포인트를 분리해도 그 안에서 `deleteAll()` 을 쓰면 똑같이 터진다. PUT 분리가 없애는 건 `null`/`[]` 해석 분기(API 설계 층)이고, 충돌 여부는 삭제 실행 시점(영속성 층)이 결정한다.
+
+    ```java
+    @Modifying
+    @Query("delete from ProblemTag pt where pt.id.problemId = :problemId")
+    void deleteAllByProblemId(@Param("problemId") Long problemId);
+    // 이걸 부른 뒤 saveAll(...) 하면 DELETE 가 확실히 먼저 나간다
+    ```
+
+- **연결**: → [[DbBasics]] (자연키와 서로게이트 키의 차이) · → 위 Q(dirty checking이 되려면 엔티티 안에 메서드를 둬야 하는 거야, 2026-08-04)
 
 ## ③ 용어 카드 (역참조)
 
-> [!quote]- 용어 24개
+> [!quote]- 용어 33개
 > - **JPA**: 자바 ORM 표준 스펙(`jakarta.persistence`). 어노테이션·인터페이스 규칙만 정의. → ① 큰 그림
 > - **Hibernate**: JPA 구현체(엔진). 실제 SQL 생성·실행, 1차 캐시/dirty checking. → ① 큰 그림
 > - **Spring Data JPA**: JPA/Hibernate를 Spring에서 쉽게 쓰게 감싼 계층. `JpaRepository`, 메서드 이름 쿼리. → ① 큰 그림
@@ -308,10 +392,19 @@ custom()   개인 테스트케이스라 순서 무의미        → 항상 0
 > - **쓰기 지연 (transactional write-behind)**: `persist`/`remove` 로 등록된 작업을 flush 까지 모아뒀다 실행하는 것. UPDATE 는 여기 쌓이지 않고 flush 때 dirty checking 이 만들어낸다. → Q(쓰기 지연과 dirty checking 관계?)
 > - **스냅샷 (snapshot)**: 엔티티를 읽을 때 영속성 컨텍스트가 떠두는 복사본. dirty checking 의 비교 기준이며, `readOnly = true` 면 뜨지 않아 수정이 반영되지 않는다. → Q(왜 전체 컬럼이 UPDATE 되나?)
 > - **@DynamicUpdate**: 바뀐 컬럼만 UPDATE 문에 싣는 Hibernate 설정. 대신 SQL 을 매번 새로 조립해 재사용을 포기한다. → Q(왜 전체 컬럼이 UPDATE 되나?)
+> - **ActionQueue**: flush 때 실행할 작업을 타입별로 모아둔 큐. 호출 순서가 아니라 타입 순서(INSERT→UPDATE→컬렉션→DELETE)로 실행한다. → Q(복합키 중복이 생긴다는거야?)
+> - **flush**: 영속성 컨텍스트의 변경을 SQL 로 만들어 DB 에 실제로 전송·실행하는 것. commit 이 아니며, 이 시점부터 커밋까지 행 락이 유지된다. → Q(update 쿼리 자체를 실행?)
+> - **FlushMode.AUTO**: 기본 flush 정책. 커밋 직전과 JPQL 쿼리 실행 직전에 자동으로 flush 한다. → Q(update 쿼리 자체를 실행?)
+> - **EntityPersister**: 엔티티 클래스마다 부팅 시 만들어지는 SQL 담당 객체. INSERT/UPDATE/DELETE/SELECT 템플릿을 미리 완성해 캐싱한다. → Q(update 쿼리 자체를 실행?)
+> - **PreparedStatement**: SQL 문자열과 바인딩 값을 분리해 실행하는 JDBC 객체. Hibernate 가 조립한 UPDATE 도 결국 이걸로 실행된다. → Q(update 쿼리 자체를 실행?)
+> - **벌크 연산 (`@Modifying`)**: 액션 큐를 거치지 않고 호출 즉시 실행되는 JPQL DELETE/UPDATE. 영속성 컨텍스트를 우회한다. → Q(복합키 중복이 생긴다는거야?)
+> - **clearAutomatically**: `@Modifying` 옵션. 벌크 실행 후 영속성 컨텍스트를 비운다. 켜면 관리 중이던 엔티티가 준영속이 되어 dirty checking 이 끊긴다. → Q(복합키 중복이 생긴다는거야?)
+> - **lost update**: 두 트랜잭션이 같은 행을 쓸 때 나중 커밋이 앞 커밋을 덮어 변경이 사라지는 현상. 전 컬럼 UPDATE 가 대표적 원인. → Q(update 쿼리 자체를 실행?)
+> - **자연키 / 서로게이트 키**: PK 를 도메인 값 조합으로 두느냐(`problem_id`+`tag_id`), 의미 없는 채번값으로 두느냐(`BIGSERIAL id`). 지웠다 넣기의 충돌 여부가 여기서 갈린다. → Q(복합키 중복이 생긴다는거야?)
 
 ## ④ 내가 틀렸던 것 (오개념 로그)
 
-> [!quote]- 오개념 21건
+> [!quote]- 오개념 29건
 > | 내가 생각했던 것 | 실제 |
 > |---|---|
 > | `@GeneratedValue`를 안 붙이면 AUTO로 자동생성된다 | 안 붙이면 자동생성 자체가 없음(내가 id 대입). **붙이고 strategy 생략**해야 AUTO |
@@ -335,3 +428,11 @@ custom()   개인 테스트케이스라 순서 무의미        → 항상 0
 > | 부분 수정은 리포지토리에서 update 쿼리를 쓰면 된다 | 벌크 UPDATE 는 `@PreUpdate` 를 건너뛰고 1차 캐시를 어긋나게 한다. PATCH 는 필드 조합이 가변이라 쿼리를 미리 만들 수도 없다 |
 > | 쓰기 지연 저장소에 UPDATE 도 쌓인다 | UPDATE 는 flush 때 dirty checking 이 만들어낸다. setter 를 불러도 그 시점에는 아무것도 등록되지 않는다 |
 > | dirty checking 이 되려면 엔티티에 전용 메서드를 정의해야 한다 | 조건은 영속 객체의 필드가 바뀌는 것뿐. setter 로 바꿔도 똑같이 돈다. 메서드가 필요한 건 private 필드를 밖에서 못 바꾸기 때문이다 |
+> | find 로 엔티티를 로드할 때 UPDATE SQL 템플릿이 만들어진다 | 템플릿은 **부팅 시** EntityPersister 에 만들어져 캐싱된다. find 때 뜨는 건 스냅샷(값 복사본)이다 |
+> | flush 되면 변경이 확정된다 | flush 는 SQL 실행일 뿐 commit 이 아니다. 그 사이 행 락이 잡히고, 예외가 나면 롤백된다 |
+> | dirty checking 이 바뀐 컬럼만 SET 절에 넣는다 | 어느 컬럼이 바뀌었는지 알면서도 기본 설정에선 전 컬럼 템플릿을 쓴다. `@DynamicUpdate` 를 켜야 반영된다 |
+> | 코드에서 `deleteAll()` 을 먼저 부르면 DELETE 가 먼저 나간다 | 액션 큐가 타입별로 재정렬해 INSERT 가 먼저 나간다. 코드 순서 ≠ SQL 순서 |
+> | `deleteAll()` 이 delete 를 실행한다 | 이름만 delete 고 실제로는 "나중에 지울 것" 예약이다. 즉시 실행하려면 벌크 `@Modifying` 이나 `flush()` 가 필요하다 |
+> | INSERT 도 Hibernate 가 자동으로 만들어준다 | 자동인 건 UPDATE 하나뿐이다. INSERT/DELETE 는 우리가 `save`/`delete` 를 부른 결과다 |
+> | `saveAll` 로 컬렉션을 넣으면 SQL 이 한 방에 나간다 | 행 하나당 SQL 하나다. `saveAll(3개)` 이면 INSERT 3번 |
+> | PUT 으로 엔드포인트를 분리하면 복합키 충돌도 같이 해결된다 | HTTP 메서드와 무관하다. 삭제를 언제 실행하느냐만이 충돌 여부를 결정한다 |
